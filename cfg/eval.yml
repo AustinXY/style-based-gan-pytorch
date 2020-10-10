@@ -1,0 +1,24 @@
+DATASET_NAME: 'lsun-car'
+SAVE_DIR: '../output/'
+GPU_ID: '3'
+WORKERS: 1  # 4
+
+SUPER_CATEGORIES: 40     # For CUB
+FINE_GRAINED_CATEGORIES: 500   # For CUB
+TEST_CHILD_CLASS: 0      # specify any value [0, FINE_GRAINED_CATEGORIES - 1]
+TEST_PARENT_CLASS: 0      # specify any value [0, SUPER_CATEGORIES - 1]
+TEST_BACKGROUND_CLASS: 0  # specify any value [0, FINE_GRAINED_CATEGORIES - 1]
+TIED_CODES: False
+TEST_DEPTH: 2
+
+TRAIN:
+    FLAG: False
+    NET_G: '../output/lsun-car_2020_09_24_06_13_24/Model/netG_600000_depth2.pth'
+    BATCH_SIZE: 1
+
+
+GAN:
+    DF_DIM: 64
+    GF_DIM: 64
+    Z_DIM: 100
+    R_NUM: 2

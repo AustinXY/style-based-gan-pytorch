@@ -1,4 +1,5 @@
 import torch
+import sys
 
 from torch import nn
 from torch.nn import init
@@ -219,6 +220,7 @@ class ConvBlock(nn.Module):
         fused=False,
     ):
         super().__init__()
+        self.downsample = downsample
 
         pad1 = padding
         pad2 = padding
@@ -229,6 +231,15 @@ class ConvBlock(nn.Module):
         kernel2 = kernel_size
         if kernel_size2 is not None:
             kernel2 = kernel_size2
+
+        self.mk_conv1 = nn.Conv2d(1, 1, kernel1, padding=pad1, bias=False)
+        self.mk_conv2 = nn.Conv2d(1, 1, kernel2, padding=pad2, bias=False)
+        nn.init.constant_(self.mk_conv1.weight.data, 1.0)
+        nn.init.constant_(self.mk_conv2.weight.data, 1.0)
+        for param in self.mk_conv1.parameters():
+            param.requires_grad = False
+        for param in self.mk_conv2.parameters():
+            param.requires_grad = False
 
         self.conv1 = nn.Sequential(
             EqualConv2d(in_channel, out_channel, kernel1, padding=pad1),
@@ -257,11 +268,38 @@ class ConvBlock(nn.Module):
                 nn.LeakyReLU(0.2),
             )
 
-    def forward(self, input):
+    def forward(self, input, mask=None):
         out = self.conv1(input)
         out = self.conv2(out)
+        if mask is not None:
+            mask = self.mk_conv1(mask)
+            mask = self.mk_conv2(mask)
+            if self.downsample:
+                mask = F.avg_pool2d(mask, 2)
 
-        return out
+        return out, mask
+
+
+class MnetConv(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, dilation=1, groups=1, bias=False):
+        super(MnetConv, self).__init__()
+        self.conv = EqualConv2d(in_channels, out_channels, kernel_size, stride, padding)
+        self.mask_conv = nn.Conv2d(
+            1, 1, kernel_size, stride, padding, dilation, groups, False)
+        nn.init.constant_(self.mask_conv.weight.data, 1.0)
+        # mask is not updated
+        for param in self.mask_conv.parameters():
+            param.requires_grad = False
+
+    def forward(self, input, mask):
+        """
+        input is regular tensor with shape N*C*H*W
+        mask has to have 1 channel N*1*H*W
+        """
+        output = self.conv(input)
+        if mask is not None:
+            mask = self.mask_conv(mask)
+        return output, mask
 
 
 class AdaptiveInstanceNorm(nn.Module):
@@ -432,7 +470,7 @@ class Generator(nn.Module):
 
             if i > 0 and step > 0:
                 out_prev = out
-                
+
             out = conv(out, style_step, noise[i])
 
             if i == step:
@@ -548,10 +586,13 @@ class Discriminator(nn.Module):
 
         self.linear = EqualLinear(512, 1)
 
-    def forward(self, input, step=0, alpha=-1):
+        # self.conv1 = MnetConv(512, 512, 3, 1, 1)
+        # self.conv_uncond_logits1 = MnetConv(512, 1, 4, 1, 0)
+        # self.conv_uncond_logits2 = MnetConv(512, 1, 4, 1, 0)
+
+    def forward(self, input, step=0, alpha=-1, mask=None):
         for i in range(step, -1, -1):
             index = self.n_layer - i - 1
-
             if i == step:
                 out = self.from_rgb[index](input)
 
@@ -561,7 +602,14 @@ class Discriminator(nn.Module):
                 mean_std = mean_std.expand(out.size(0), 1, 4, 4)
                 out = torch.cat([out, mean_std], 1)
 
-            out = self.progression[index](out)
+            out, mask = self.progression[index](out, mask)
+
+            # if i == 4:
+            #     lcl_out = out.clone()
+            #     if mask is not None:
+            #         lcl_mask = mask.clone()
+            #     else:
+            #         lcl_mask = None
 
             if i > 0:
                 if i == step and 0 <= alpha < 1:
@@ -570,8 +618,21 @@ class Discriminator(nn.Module):
 
                     out = (1 - alpha) * skip_rgb + alpha * out
 
+        # if step >= 4:
+        #     lcl_out, lcl_mask = self.conv1(lcl_out, lcl_mask)                  # 512*32*32
+        #     lcl_out = F.leaky_relu(lcl_out, 0.2, inplace=True)
+        #     _lcl_out, _lcl_mask = self.conv_uncond_logits1(lcl_out, lcl_mask)  # 1*29*29
+        #     classi_score = F.sigmoid(_lcl_out)
+        #     _lcl_out, _lcl_mask = self.conv_uncond_logits2(lcl_out, lcl_mask)
+        #     rf_score = F.sigmoid(_lcl_out)
+        # else:
+        #     print('step < 4')
+        #     sys.exit(0)
+
         out = out.squeeze(2).squeeze(2)
         # print(input.size(), out.size(), step)
         out = self.linear(out)
+        # out = F.sigmoid(self.linear(out))
 
+        # return [classi_score, rf_score, _lcl_mask], out
         return out

@@ -44,6 +44,7 @@ def prepare(transaction, dataset, n_worker, sizes=(8, 16, 32, 64, 128, 256, 512,
     files = sorted(dataset.imgs, key=lambda x: x[0])
     files = [(i, file) for i, (file, label) in enumerate(files)]
     total = 0
+    db_size = 100000
 
     with multiprocessing.Pool(n_worker) as pool:
         for i, imgs in tqdm(pool.imap_unordered(resize_fn, files)):
@@ -52,6 +53,8 @@ def prepare(transaction, dataset, n_worker, sizes=(8, 16, 32, 64, 128, 256, 512,
                 transaction.put(key, img)
 
             total += 1
+            if total >= db_size:
+                break
 
         transaction.put('length'.encode('utf-8'), str(total).encode('utf-8'))
 
